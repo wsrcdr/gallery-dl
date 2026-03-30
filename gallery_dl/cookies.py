@@ -26,7 +26,7 @@ from . import aes, text, util
 
 SUPPORTED_BROWSERS_CHROMIUM = {
     "brave", "chrome", "chromium", "edge", "opera", "thorium", "vivaldi"}
-SUPPORTED_BROWSERS_FIREFOX = {"firefox", "librewolf", "zen", "floorp"}
+SUPPORTED_BROWSERS_FIREFOX = {"firefox", "librewolf", "zen"}
 SUPPORTED_BROWSERS_WEBKIT = {"safari", "orion"}
 SUPPORTED_BROWSERS = \
     SUPPORTED_BROWSERS_CHROMIUM \
@@ -51,8 +51,8 @@ def load_cookies(browser_specification):
 
 def load_cookies_firefox(browser_name, profile=None,
                          container=None, domain=None):
-    path, container_id = _firefox_cookies_database(
-        browser_name, profile, container)
+    path, container_id = _firefox_cookies_database(browser_name,
+                                                   profile, container)
 
     sql = ("SELECT name, value, host, path, isSecure, expiry "
            "FROM moz_cookies")
@@ -119,7 +119,7 @@ def load_cookies_webkit(browser_name, profile=None, domain=None):
     for page_size in page_sizes:
         _webkit_parse_cookies_page(p.read_bytes(page_size), cookies)
     _log_info("Extracted %s cookies from %s",
-              len(cookies), browser_name.capitalize())
+              browser_name.capitalize(), len(cookies))
 
     return cookies
 
@@ -219,16 +219,13 @@ def _firefox_cookies_database(browser_name, profile=None, container=None):
     elif _is_path(profile):
         search_root = profile
     else:
-        search_root = _firefox_browser_directory(browser_name)
-        if isinstance(search_root, str):
-            search_root = os.path.join(search_root, profile)
-        else:
-            search_root = [os.path.join(dir, profile) for dir in search_root]
+        search_root = os.path.join(
+            _firefox_browser_directory(browser_name), profile)
 
     path = _find_most_recently_used_file(search_root, "cookies.sqlite")
     if path is None:
         raise FileNotFoundError(f"Unable to find {browser_name.capitalize()} "
-                                f"cookies database")
+                                f"cookies database in {search_root}")
 
     _log_debug("Extracting cookies from %s", path)
 
@@ -275,7 +272,6 @@ def _firefox_browser_directory(browser_name):
             "firefox"  : join(appdata, R"Mozilla\Firefox\Profiles"),
             "librewolf": join(appdata, R"librewolf\Profiles"),
             "zen"      : join(appdata, R"zen\Profiles"),
-            "floorp"   : join(appdata, R"Floorp\Profiles")
         }[browser_name]
     elif sys.platform == "darwin":
         appdata = os.path.expanduser("~/Library/Application Support")
@@ -283,25 +279,14 @@ def _firefox_browser_directory(browser_name):
             "firefox"  : join(appdata, R"Firefox/Profiles"),
             "librewolf": join(appdata, R"librewolf/Profiles"),
             "zen"      : join(appdata, R"zen/Profiles"),
-            "floorp"   : join(appdata, R"Floorp/Profiles")
         }[browser_name]
     else:
         home = os.path.expanduser("~")
-        if browser_name == "firefox":
-            config = (os.environ.get("XDG_CONFIG_HOME") or
-                      os.path.expanduser("~/.config"))
-            return (
-                # versions >= 147
-                join(config, "mozilla/firefox"),
-                # versions <= 146
-                home + "/.mozilla/firefox",
-                # Flatpak
-                home + "/.var/app/org.mozilla.firefox/config/mozilla/firefox",
-                home + "/.var/app/org.mozilla.firefox/.mozilla/firefox",
-                # Snap
-                home + "/snap/firefox/common/.mozilla/firefox",
-            )
-        return f"{home}/.{browser_name}"
+        return {
+            "firefox"  : join(home, R".mozilla/firefox"),
+            "librewolf": join(home, R".librewolf"),
+            "zen"      : join(home, R".zen"),
+        }[browser_name]
 
 
 # --------------------------------------------------------------------
@@ -1110,24 +1095,19 @@ def _decrypt_windows_dpapi(ciphertext):
     return result
 
 
-def _find_most_recently_used_file(roots, filename):
-    if isinstance(roots, str):
-        roots = (roots,)
-
+def _find_most_recently_used_file(root, filename):
     # if the provided root points to an exact profile path
     # check if it contains the wanted filename
-    for root in roots:
-        first_choice = os.path.join(root, filename)
-        if os.path.exists(first_choice):
-            return first_choice
+    first_choice = os.path.join(root, filename)
+    if os.path.exists(first_choice):
+        return first_choice
 
     # if there are multiple browser profiles, take the most recently used one
     paths = []
-    for root in roots:
-        for curr_root, dirs, files in os.walk(root):
-            for file in files:
-                if file == filename:
-                    paths.append(os.path.join(curr_root, file))
+    for curr_root, dirs, files in os.walk(root):
+        for file in files:
+            if file == filename:
+                paths.append(os.path.join(curr_root, file))
     if not paths:
         return None
     return max(paths, key=lambda path: os.lstat(path).st_mtime)

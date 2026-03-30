@@ -18,7 +18,7 @@ class S3ndpicsExtractor(Extractor):
     """Base class for s3ndpics extractors"""
     category = "s3ndpics"
     root = "https://s3nd.pics"
-    root_api = root + "/api"
+    root_api = f"{root}/api"
     directory_fmt = ("{category}", "{user[username]}",
                      "{date} {title:?/ /}({id})")
     filename_fmt = "{num:>02}.{extension}"
@@ -30,18 +30,20 @@ class S3ndpicsExtractor(Extractor):
         for post in self.posts():
             post["id"] = post.pop("_id", None)
             post["user"] = post.pop("userId", None)
-            post["date"] = self.parse_datetime_iso(post["createdAt"])
-            post["date_updated"] = self.parse_datetime_iso(post["updatedAt"])
+            post["date"] = text.parse_datetime(
+                post["createdAt"], "%Y-%m-%dT%H:%M:%S.%fZ")
+            post["date_updated"] = text.parse_datetime(
+                post["updatedAt"], "%Y-%m-%dT%H:%M:%S.%fZ")
 
             files = post.pop("files", ())
             post["count"] = len(files)
 
-            yield Message.Directory, "", post
+            yield Message.Directory, post
             for post["num"], file in enumerate(files, 1):
                 post["type"] = file["type"]
                 path = file["url"]
                 text.nameext_from_url(path, post)
-                yield Message.Url, base + path, post
+                yield Message.Url, f"{base}{path}", post
 
     def _pagination(self, url, params):
         params["page"] = 1
@@ -59,7 +61,7 @@ class S3ndpicsExtractor(Extractor):
 
 class S3ndpicsPostExtractor(S3ndpicsExtractor):
     subcategory = "post"
-    pattern = BASE_PATTERN + r"/post/([0-9a-f]+)"
+    pattern = rf"{BASE_PATTERN}/post/([0-9a-f]+)"
     example = "https://s3nd.pics/post/0123456789abcdef01234567"
 
     def posts(self):
@@ -69,14 +71,14 @@ class S3ndpicsPostExtractor(S3ndpicsExtractor):
 
 class S3ndpicsUserExtractor(S3ndpicsExtractor):
     subcategory = "user"
-    pattern = BASE_PATTERN + r"/user/(\w+)"
+    pattern = rf"{BASE_PATTERN}/user/(\w+)"
     example = "https://s3nd.pics/user/USER"
 
     def posts(self):
         url = f"{self.root_api}/users/username/{self.groups[0]}"
         self.kwdict["user"] = user = self.request_json(url)["user"]
 
-        url = self.root_api + "/posts"
+        url = f"{self.root_api}/posts"
         params = {
             "userId": user["_id"],
             "limit" : "12",
@@ -87,11 +89,11 @@ class S3ndpicsUserExtractor(S3ndpicsExtractor):
 
 class S3ndpicsSearchExtractor(S3ndpicsExtractor):
     subcategory = "search"
-    pattern = BASE_PATTERN + r"/search/?\?([^#]+)"
+    pattern = rf"{BASE_PATTERN}/search/?\?([^#]+)"
     example = "https://s3nd.pics/search?QUERY"
 
     def posts(self):
-        url = self.root_api + "/posts"
+        url = f"{self.root_api}/posts"
         params = text.parse_query(self.groups[0])
         params.setdefault("limit", "20")
         self.kwdict["search_tags"] = \

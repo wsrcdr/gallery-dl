@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 # Copyright 2020 Leonid "Bepis" Pavel
-# Copyright 2023-2026 Mike Fährmann
+# Copyright 2023-2025 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -10,7 +10,7 @@
 """Extractors for https://imgchest.com/"""
 
 from .common import GalleryExtractor, Extractor, Message
-from .. import text, util
+from .. import text, util, exception
 
 BASE_PATTERN = r"(?:https?://)?(?:www\.)?imgchest\.com"
 
@@ -40,7 +40,7 @@ class ImagechestGalleryExtractor(GalleryExtractor):
             post = data["props"]["post"]
         except Exception:
             if "<title>Not Found</title>" in page:
-                raise self.exc.NotFoundError("gallery")
+                raise exception.NotFoundError("gallery")
             self.files = ()
             return {}
 
@@ -53,9 +53,11 @@ class ImagechestGalleryExtractor(GalleryExtractor):
     def _metadata_api(self, page):
         post = self.api.post(self.gallery_id)
 
-        post["date"] = self.parse_datetime_iso(post["created"])
+        post["date"] = text.parse_datetime(
+            post["created"], "%Y-%m-%dT%H:%M:%S.%fZ")
         for img in post["images"]:
-            img["date"] = self.parse_datetime_iso(img["created"])
+            img["date"] = text.parse_datetime(
+                img["created"], "%Y-%m-%dT%H:%M:%S.%fZ")
 
         post["gallery_id"] = self.gallery_id
         post.pop("image_count", None)
@@ -142,12 +144,11 @@ class ImagechestAPI():
                 return response.json()["data"]
 
             elif response.status_code < 400:
-                raise self.extractor.exc.AuthenticationError(
-                    "Invalid API access token")
+                raise exception.AuthenticationError("Invalid API access token")
 
             elif response.status_code == 429:
                 self.extractor.wait(seconds=600)
 
             else:
                 self.extractor.log.debug(response.text)
-                raise self.extractor.exc.AbortExtraction("API request failed")
+                raise exception.AbortExtraction("API request failed")

@@ -22,14 +22,14 @@ class GirlsreleasedExtractor(Extractor):
 
     def items(self):
         data = {"_extractor": GirlsreleasedSetExtractor}
-        base = self.root + "/set/"
+        base = f"{self.root}/set/"
         for set in self._pagination():
-            yield Message.Queue, base + set[0], data
+            yield Message.Queue, f"{base}{set[0]}", data
 
     def _pagination(self):
         base = f"{self.root}/api/0.2/sets/{self._path}/{self.groups[0]}/page/"
         for pnum in itertools.count():
-            sets = self.request_json(base + str(pnum))["sets"]
+            sets = self.request_json(f"{base}{pnum}")["sets"]
             if not sets:
                 return
 
@@ -52,11 +52,11 @@ class GirlsreleasedSetExtractor(GirlsreleasedExtractor):
             "id": json["id"],
             "site": json["site"],
             "model": [model for _, model in json["models"]],
-            "date": self.parse_timestamp(json["date"]),
+            "date": text.parse_timestamp(json["date"]),
             "count": len(json["images"]),
             "url": "https://girlsreleased.com/set/" + json["id"],
         }
-        yield Message.Directory, "", data
+        yield Message.Directory, data
         for data["num"], image in enumerate(json["images"], 1):
             text.nameext_from_url(image[5], data)
             yield Message.Queue, image[3], data

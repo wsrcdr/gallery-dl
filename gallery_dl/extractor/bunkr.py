@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2022-2026 Mike Fährmann
+# Copyright 2022-2025 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -10,7 +10,7 @@
 
 from .common import Extractor
 from .lolisafe import LolisafeAlbumExtractor
-from .. import text, util, config
+from .. import text, util, config, exception
 import random
 
 if config.get(("extractor", "bunkr"), "tlds"):
@@ -84,7 +84,7 @@ class BunkrAlbumExtractor(LolisafeAlbumExtractor):
         self.endpoint = endpoint
         self.offset = 0
 
-    def skip_files(self, num):
+    def skip(self, num):
         self.offset = num
         return num
 
@@ -109,7 +109,7 @@ class BunkrAlbumExtractor(LolisafeAlbumExtractor):
                 self.log.debug("Redirect to known CF challenge domain '%s'",
                                root)
 
-            except self.exc.HttpError as exc:
+            except exception.HttpError as exc:
                 if exc.status != 403:
                     raise
 
@@ -124,7 +124,7 @@ class BunkrAlbumExtractor(LolisafeAlbumExtractor):
                     pass
                 else:
                     if not DOMAINS:
-                        raise self.exc.AbortExtraction(
+                        raise exception.AbortExtraction(
                             "All Bunkr domains require solving a CF challenge")
 
             # select alternative domain
@@ -167,19 +167,15 @@ class BunkrAlbumExtractor(LolisafeAlbumExtractor):
                     item, 'name: "', ".")
                 file["size"] = text.parse_int(text.extr(
                     item, "size:  ", " ,\n"))
-                file["date"] = self.parse_datetime(text.extr(
+                file["date"] = text.parse_datetime(text.extr(
                     item, 'timestamp: "', '"'), "%H:%M:%S %d/%m/%Y")
 
                 yield file
-            except self.exc.ControlException:
+            except exception.ControlException:
                 raise
             except Exception as exc:
                 self.log.error("%s: %s", exc.__class__.__name__, exc)
                 self.log.debug("%s", item, exc_info=exc)
-                if isinstance(exc, self.exc.HttpError) and \
-                        exc.status == 400 and \
-                        exc.response.url.startswith(self.root_api):
-                    raise self.exc.AbortExtraction("Album deleted")
 
     def _extract_file(self, data_id):
         referer = f"{self.root_dl}/file/{data_id}"
@@ -188,7 +184,7 @@ class BunkrAlbumExtractor(LolisafeAlbumExtractor):
                                  json={"id": data_id})
 
         if data.get("encrypted"):
-            key = "SECRET_KEY_" + str(data["timestamp"] // 3600)
+            key = f"SECRET_KEY_{data['timestamp'] // 3600}"
             file_url = util.decrypt_xor(data["url"], key.encode())
         else:
             file_url = data["url"]
@@ -201,8 +197,7 @@ class BunkrAlbumExtractor(LolisafeAlbumExtractor):
         }
 
     def _validate(self, response):
-        if response.history and response.url.endswith(
-                ("/maint.mp4", "/maintenance-vid.mp4")):
+        if response.history and response.url.endswith("/maintenance-vid.mp4"):
             self.log.warning("File server in maintenance mode")
             return False
         return True
@@ -221,7 +216,7 @@ class BunkrMediaExtractor(BunkrAlbumExtractor):
 
     def fetch_album(self, album_id):
         try:
-            page = self.request(self.root + album_id).text
+            page = self.request(f"{self.root}{album_id}").text
             data_id = text.extr(page, 'data-file-id="', '"')
             file = self._extract_file(data_id)
             file["name"] = text.unquote(text.unescape(text.extr(
@@ -232,25 +227,10 @@ class BunkrMediaExtractor(BunkrAlbumExtractor):
             self.log.error("%s: %s", exc.__class__.__name__, exc)
             return (), {}
 
-        album_id, album_name, album_size = self.cache(
-            self._album_info, text.extr(page, ' href="../a/', '"'))
         return (file,), {
-            "album_id"  : album_id,
-            "album_name": album_name,
-            "album_size": album_size,
-            "count"     : 1,
+            "album_id"   : "",
+            "album_name" : "",
+            "album_size" : -1,
+            "description": "",
+            "count"      : 1,
         }
-
-    def _album_info(self, album_id):
-        if album_id:
-            try:
-                page = self.request(f"{self.root}/a/{album_id}").text
-                return (
-                    album_id,
-                    text.unescape(text.unescape(text.extr(
-                        page, 'property="og:title" content="', '"'))),
-                    text.extr(page, '<span class="font-semibold">(', ')'),
-                )
-            except Exception:
-                pass
-        return album_id, "", -1

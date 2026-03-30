@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2021-2026 Mike Fährmann
+# Copyright 2021-2025 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -9,7 +9,8 @@
 """Extractors for https://www.pillowfort.social/"""
 
 from .common import Extractor, Message
-from .. import text
+from ..cache import cache
+from .. import text, util, exception
 
 BASE_PATTERN = r"(?:https?://)?www\.pillowfort\.social"
 
@@ -35,7 +36,7 @@ class PillowfortExtractor(Extractor):
         external = self.config("external", False)
 
         if inline:
-            inline = text.re(r'src="(https://img\d+\.pillowfort\.social'
+            inline = util.re(r'src="(https://img\d+\.pillowfort\.social'
                              r'/posts/[^"]+)').findall
 
         for post in self.posts():
@@ -47,10 +48,11 @@ class PillowfortExtractor(Extractor):
                 for url in inline(post["content"]):
                     files.append({"url": url})
 
-            post["date"] = self.parse_datetime_iso(post["created_at"])
+            post["date"] = text.parse_datetime(
+                post["created_at"], "%Y-%m-%dT%H:%M:%S.%f%z")
             post["post_id"] = post.pop("id")
             post["count"] = len(files)
-            yield Message.Directory, "", post
+            yield Message.Directory, post
 
             post["num"] = 0
             for file in files:
@@ -74,7 +76,8 @@ class PillowfortExtractor(Extractor):
                 if "id" not in file:
                     post["id"] = post["hash"]
                 if "created_at" in file:
-                    post["date"] = self.parse_datetime_iso(file["created_at"])
+                    post["date"] = text.parse_datetime(
+                        file["created_at"], "%Y-%m-%dT%H:%M:%S.%f%z")
 
                 yield msgtype, url, post
 
@@ -86,10 +89,9 @@ class PillowfortExtractor(Extractor):
 
         username, password = self._get_auth_info()
         if username:
-            return self.cookies_update(self.cache(
-                self._login_impl, username, password,
-                _exp=14*86400, _mem=False))
+            self.cookies_update(self._login_impl(username, password))
 
+    @cache(maxage=14*86400, keyarg=1)
     def _login_impl(self, username, password):
         self.log.info("Logging in as %s", username)
 
@@ -108,7 +110,7 @@ class PillowfortExtractor(Extractor):
         response = self.request(url, method="POST", headers=headers, data=data)
 
         if not response.history:
-            raise self.exc.AuthenticationError()
+            raise exception.AuthenticationError()
 
         return {
             cookie.name: cookie.value

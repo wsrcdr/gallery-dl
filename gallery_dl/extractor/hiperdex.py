@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2020-2026 Mike Fährmann
+# Copyright 2020-2025 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -9,7 +9,8 @@
 """Extractors for https://hiperdex.com/"""
 
 from .common import ChapterExtractor, MangaExtractor
-from .. import text
+from .. import text, util
+from ..cache import memcache
 
 BASE_PATTERN = (r"((?:https?://)?(?:www\.)?"
                 r"(?:1st)?hiper(?:dex|toon)\d?\.(?:com|net|info|top))")
@@ -20,6 +21,7 @@ class HiperdexBase():
     category = "hiperdex"
     root = "https://hiperdex.com"
 
+    @memcache(keyarg=1)
     def manga_data(self, manga, page=None):
         if not page:
             url = f"{self.root}/manga/{manga}/"
@@ -55,11 +57,12 @@ class HiperdexBase():
         if chapter.startswith("chapter-"):
             chapter = chapter[8:]
         chapter, _, minor = chapter.partition("-")
-        return {
-            **self.cache(self.manga_data, self.manga.lower()),
+        data = {
             "chapter"      : text.parse_int(chapter),
             "chapter_minor": "." + minor if minor and minor != "end" else "",
         }
+        data.update(self.manga_data(self.manga.lower()))
+        return data
 
 
 class HiperdexChapterExtractor(HiperdexBase, ChapterExtractor):
@@ -76,7 +79,7 @@ class HiperdexChapterExtractor(HiperdexBase, ChapterExtractor):
         return self.chapter_data(self.chapter)
 
     def images(self, page):
-        pattern = text.re(r'id="image-\d+"\s+(?:data-)?src="([^"]+)')
+        pattern = util.re(r'id="image-\d+"\s+(?:data-)?src="([^"]+)')
         return [
             (url.strip(), None)
             for url in pattern.findall(page)
@@ -95,7 +98,7 @@ class HiperdexMangaExtractor(HiperdexBase, MangaExtractor):
         MangaExtractor.__init__(self, match, self.root + path + "/")
 
     def chapters(self, page):
-        data = self.cache(self.manga_data, self.manga, page)
+        data = self.manga_data(self.manga, page)
         self.page_url = url = data["url"]
 
         url = self.page_url + "ajax/chapters/"

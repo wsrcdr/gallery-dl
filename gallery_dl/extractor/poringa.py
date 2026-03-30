@@ -7,7 +7,8 @@
 """Extractors for http://www.poringa.net/"""
 
 from .common import Extractor, Message
-from .. import text
+from .. import text, exception
+from ..cache import cache
 import itertools
 
 BASE_PATTERN = r"(?:https?://)?(?:www\.)?poringa\.net"
@@ -31,7 +32,7 @@ class PoringaExtractor(Extractor):
 
             try:
                 response = self.request(url)
-            except self.exc.HttpError as exc:
+            except exception.HttpError as exc:
                 self.log.warning(
                     "Unable to fetch posts for '%s' (%s)", post_id, exc)
                 continue
@@ -67,7 +68,7 @@ class PoringaExtractor(Extractor):
                 main_post, '<img class="imagen" border="0" src="', '"'))
             data["count"] = len(urls)
 
-            yield Message.Directory, "", data
+            yield Message.Directory, data
             for data["num"], url in enumerate(urls, 1):
                 yield Message.Url, url, text.nameext_from_url(url, data)
 
@@ -77,13 +78,12 @@ class PoringaExtractor(Extractor):
     def request(self, url, **kwargs):
         if self.__cookies:
             self.__cookies = False
-            self.cookies_update(self.cache(
-                _cookie_cache, _key=None, _mem=False))
+            self.cookies_update(_cookie_cache())
 
         for _ in range(5):
             response = Extractor.request(self, url, **kwargs)
             if response.cookies:
-                self.cache_update(_cookie_cache, None, response.cookies)
+                _cookie_cache.update("", response.cookies)
             if response.content.find(
                     b"<title>Please wait a few moments</title>", 0, 600) < 0:
                 return response
@@ -133,5 +133,6 @@ class PoringaSearchExtractor(PoringaExtractor):
         return self._pagination(url, params)
 
 
+@cache()
 def _cookie_cache():
     return ()

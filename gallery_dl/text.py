@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2015-2026 Mike Fährmann
+# Copyright 2015-2025 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -8,7 +8,10 @@
 
 """Collection of functions that work on strings/text"""
 
+import sys
 import html
+import time
+import datetime
 import urllib.parse
 import re as re_module
 
@@ -110,55 +113,11 @@ def nameext_from_url(url, data=None):
     filename = unquote(filename_from_url(url))
     name, _, ext = filename.rpartition(".")
     if name and len(ext) <= 16:
-        data["filename"] = name
-        data["extension"] = ext.lower()
+        data["filename"], data["extension"] = name, ext.lower()
     else:
-        data["filename"] = filename
-        data["extension"] = ""
+        data["filename"], data["extension"] = filename, ""
 
     return data
-
-
-def nameext_from_name(filename, data=None):
-    """Extract the last part of a file name and fill 'data' accordingly"""
-    if data is None:
-        data = {}
-
-    name, _, ext = filename.rpartition(".")
-    if name and len(ext) <= 16:
-        data["filename"] = name
-        data["extension"] = ext.lower()
-    else:
-        data["filename"] = filename
-        data["extension"] = ""
-
-    return data
-
-
-def filename_from_contentdisposition(cd):
-    if (pos := cd.find("filename*=")) >= 0:
-        if cd[pos+10] == '"':
-            pos += 11
-            value = cd[pos:cd.find('"', pos)]
-        else:
-            end = cd.find(";", pos+10)
-            value = cd[pos+10:end if end >= 0 else None]
-        try:
-            encoding, _, value = value.split("'", 2)
-            return unquote(value, encoding, "replace")
-        except Exception:
-            pass
-
-    if (pos := cd.find("filename=")) >= 0:
-        if (q := cd[pos+9]) in "\"'":
-            pos += 10
-            value = cd[pos:cd.find(q, pos)]
-        else:
-            end = cd.find(";", pos+9)
-            value = cd[pos+9:end if end >= 0 else None]
-        return unquote(value)
-
-    return ""
 
 
 def extract(txt, begin, end, pos=None):
@@ -255,14 +214,6 @@ def extract_from(txt, pos=None, default=""):
         except Exception:
             return default
     return extr
-
-
-extract_urls = re(r"https?://[^\s\"'<>\\]+").findall
-
-
-def parse_hex_escapes(txt):
-    """Convert hex escapes in 'txt' into actual characters"""
-    return re(r"\\x([0-9a-fA-F]{2})").sub(_hex_to_char, txt)
 
 
 def parse_unicode_escapes(txt):
@@ -369,6 +320,46 @@ def build_query(params):
         f"{quote(name)}={quote(value)}"
         for name, value in params.items()
     ])
+
+
+if sys.hexversion < 0x30c0000:
+    # Python <= 3.11
+    def parse_timestamp(ts, default=None):
+        """Create a datetime object from a Unix timestamp"""
+        try:
+            return datetime.datetime.utcfromtimestamp(int(ts))
+        except Exception:
+            return default
+else:
+    # Python >= 3.12
+    def parse_timestamp(ts, default=None):
+        """Create a datetime object from a Unix timestamp"""
+        try:
+            Y, m, d, H, M, S, _, _, _ = time.gmtime(int(ts))
+            return datetime.datetime(Y, m, d, H, M, S)
+        except Exception:
+            return default
+
+
+def parse_datetime(date_string, format="%Y-%m-%dT%H:%M:%S%z", utcoffset=0):
+    """Create a datetime object by parsing 'date_string'"""
+    try:
+        d = datetime.datetime.strptime(date_string, format)
+        o = d.utcoffset()
+        if o is not None:
+            # convert to naive UTC
+            d = d.replace(tzinfo=None, microsecond=0) - o
+        else:
+            if d.microsecond:
+                d = d.replace(microsecond=0)
+            if utcoffset:
+                # apply manual UTC offset
+                d += datetime.timedelta(0, utcoffset * -3600)
+        return d
+    except (TypeError, IndexError, KeyError):
+        return None
+    except (ValueError, OverflowError):
+        return date_string
 
 
 urljoin = urllib.parse.urljoin

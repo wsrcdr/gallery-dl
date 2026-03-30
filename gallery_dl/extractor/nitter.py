@@ -9,18 +9,16 @@
 """Extractors for Nitter instances"""
 
 from .common import BaseExtractor, Message
-from .. import text, util
+from .. import text
 import binascii
 
 
 class NitterExtractor(BaseExtractor):
     """Base class for nitter extractors"""
     basecategory = "nitter"
-    directory_fmt = ("nitter", "{user[name]}")
+    directory_fmt = ("{category}", "{user[name]}")
     filename_fmt = "{tweet_id}_{num}.{extension}"
     archive_fmt = "{tweet_id}_{num}"
-    useragent = util.USERAGENT_GALLERYDL
-    request_interval = (0.5, 1.5)
 
     def __init__(self, match):
         self.cookies_domain = self.root.partition("://")[2]
@@ -99,7 +97,7 @@ class NitterExtractor(BaseExtractor):
                 files = ()
             tweet["count"] = len(files)
 
-            yield Message.Directory, "", tweet
+            yield Message.Directory, tweet
             for tweet["num"], file in enumerate(files, 1):
                 url = file["url"]
                 file.update(tweet)
@@ -116,7 +114,7 @@ class NitterExtractor(BaseExtractor):
         return {
             "author"  : author,
             "user"    : self.user_obj or author,
-            "date"    : self.parse_datetime(
+            "date"    : text.parse_datetime(
                 extr('title="', '"'), "%b %d, %Y · %I:%M %p %Z"),
             "tweet_id": link.rpartition("/")[2].partition("#")[0],
             "content": extr('class="tweet-content', "</div").partition(">")[2],
@@ -144,7 +142,7 @@ class NitterExtractor(BaseExtractor):
         return {
             "author"  : author,
             "user"    : self.user_obj or author,
-            "date"    : self.parse_datetime(
+            "date"    : text.parse_datetime(
                 extr('title="', '"'), "%b %d, %Y · %I:%M %p %Z"),
             "tweet_id": link.rpartition("/")[2].partition("#")[0],
             "content" : extr('class="quote-text', "</div").partition(">")[2],
@@ -175,7 +173,7 @@ class NitterExtractor(BaseExtractor):
             "nick"            : extr('title="', '"'),
             "name"            : extr('title="@', '"'),
             "description"     : extr('<p dir="auto">', '<'),
-            "date"            : self.parse_datetime(
+            "date"            : text.parse_datetime(
                 extr('class="profile-joindate"><span title="', '"'),
                 "%I:%M %p - %d %b %Y"),
             "statuses_count"  : text.parse_int(extr(
@@ -229,26 +227,6 @@ class NitterExtractor(BaseExtractor):
 
 
 BASE_PATTERN = NitterExtractor.update({
-    "nitter.net": {
-        "root": "https://nitter.net",
-        "pattern": r"(?:www\.)?nitter\.net",
-    },
-    "nitter.space": {
-        "root": "https://nitter.space",
-        "pattern": r"(?:www\.)?nitter\.space",
-    },
-    "nitter.tiekoetter": {
-        "root": "https://nitter.tiekoetter",
-        "pattern": r"(?:www\.)?nitter\.tiekoetter\.com",
-    },
-    "xcancel": {
-        "root": "https://xcancel.com",
-        "pattern": r"(?:www\.)?xcancel\.com",
-    },
-    "lightbrd": {
-        "root": "https://lightbrd.com",
-        "pattern": r"(?:www\.)?lightbrd\.com",
-    },
 })
 
 USER_PATTERN = BASE_PATTERN + r"/(i(?:/user/|d:)(\d+)|[^/?#]+)"
@@ -293,7 +271,7 @@ class NitterSearchExtractor(NitterExtractor):
 class NitterTweetExtractor(NitterExtractor):
     """Extractor for nitter tweets"""
     subcategory = "tweet"
-    directory_fmt = ("nitter", "{user[name]}")
+    directory_fmt = ("{category}", "{user[name]}")
     filename_fmt = "{tweet_id}_{num}.{extension}"
     archive_fmt = "{tweet_id}_{num}"
     pattern = BASE_PATTERN + r"/(i/web|[^/?#]+)/status/(\d+())"

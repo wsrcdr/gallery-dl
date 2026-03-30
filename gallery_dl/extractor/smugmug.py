@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2018-2026 Mike Fährmann
+# Copyright 2018-2025 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -9,7 +9,7 @@
 """Extractors for https://www.smugmug.com/"""
 
 from .common import Extractor, Message
-from .. import text, oauth
+from .. import text, oauth, exception
 
 BASE_PATTERN = (
     r"(?:smugmug:(?!album:)(?:https?://)?([^/]+)|"
@@ -81,7 +81,7 @@ class SmugmugAlbumExtractor(SmugmugExtractor):
         del album["Uris"]
         data = {"Album": album, "User": user}
 
-        yield Message.Directory, "", data
+        yield Message.Directory, data
 
         for image in self.api.album_images(self.album_id, "ImageSizeDetails"):
             url = self._select_format(image)
@@ -107,7 +107,7 @@ class SmugmugImageExtractor(SmugmugExtractor):
         data = {"Image": image}
         text.nameext_from_url(url, data)
 
-        yield Message.Directory, "", data
+        yield Message.Directory, data
         yield Message.Url, url, data
 
 
@@ -204,25 +204,22 @@ class SmugmugAPI(oauth.OAuth1API):
         params["_verbosity"] = "1"
 
         response = self.request(url, params=params, headers=self.HEADERS)
-        try:
-            data = response.json()
-        except ValueError:
-            raise self.exc.NotFoundError(self.extractor.__class__.subcategory)
+        data = response.json()
 
         if 200 <= data["Code"] < 400:
             return data
         if data["Code"] == 404:
-            raise self.exc.NotFoundError(self.extractor.__class__.subcategory)
+            raise exception.NotFoundError()
         if data["Code"] == 429:
-            raise self.exc.AbortExtraction("Rate limit reached")
+            raise exception.AbortExtraction("Rate limit reached")
         self.log.debug(data)
-        raise self.exc.AbortExtraction("API request failed")
+        raise exception.AbortExtraction("API request failed")
 
     def _expansion(self, endpoint, expands, params=None):
         endpoint = self._extend(endpoint, expands)
         result = self._apply_expansions(self._call(endpoint, params), expands)
         if not result:
-            raise self.exc.NotFoundError()
+            raise exception.NotFoundError()
         return result[0]
 
     def _pagination(self, endpoint, expands=None):

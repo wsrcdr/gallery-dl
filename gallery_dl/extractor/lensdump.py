@@ -119,9 +119,10 @@ class LensdumpImageExtractor(LensdumpBase, Extractor):
                 'property="image:width" content="', '"')),
             "height": text.parse_int(extr(
                 'property="image:height" content="', '"')),
-            "date"  : self.parse_datetime_iso(extr('<span title="', '"')),
+            "date"  : text.parse_datetime(extr(
+                '<span title="', '"'), "%Y-%m-%d %H:%M:%S"),
         }
 
         text.nameext_from_url(data["url"], data)
-        yield Message.Directory, "", data
+        yield Message.Directory, data
         yield Message.Url, data["url"], data

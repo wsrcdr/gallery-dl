@@ -7,7 +7,7 @@
 """Extractors for https://4archive.org/"""
 
 from .common import Extractor, Message
-from .. import text, dt
+from .. import text, util
 
 
 class _4archiveThreadExtractor(Extractor):
@@ -37,8 +37,8 @@ class _4archiveThreadExtractor(Extractor):
 
         for post in posts:
             post.update(data)
-            post["time"] = int(dt.to_ts(post["date"]))
-            yield Message.Directory, "", post
+            post["time"] = int(util.datetime_to_timestamp(post["date"]))
+            yield Message.Directory, post
             if "url" in post:
                 yield Message.Url, post["url"], text.nameext_from_url(
                     post["filename"], post)
@@ -61,9 +61,10 @@ class _4archiveThreadExtractor(Extractor):
         extr = text.extract_from(post)
         data = {
             "name": extr('class="name">', "</span>"),
-            "date": self.parse_datetime_iso(
+            "date": text.parse_datetime(
                 (extr('class="dateTime">', "<") or
-                 extr('class="dateTime postNum" >', "<")).strip()),
+                 extr('class="dateTime postNum" >', "<")).strip(),
+                "%Y-%m-%d %H:%M:%S"),
             "no"  : text.parse_int(extr(">Post No.", "<")),
         }
         if 'class="file"' in post:

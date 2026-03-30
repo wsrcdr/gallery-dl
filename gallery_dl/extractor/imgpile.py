@@ -22,10 +22,13 @@ class ImgpileExtractor(Extractor):
                      "{post[title]} ({post[id_slug]})")
     archive_fmt = "{post[id_slug]}_{id}"
 
+    def items(self):
+        pass
+
 
 class ImgpilePostExtractor(ImgpileExtractor):
     subcategory = "post"
-    pattern = BASE_PATTERN + r"/p/(\w+)"
+    pattern = rf"{BASE_PATTERN}/p/(\w+)"
     example = "https://imgpile.com/p/AbCdEfG"
 
     def items(self):
@@ -51,7 +54,7 @@ class ImgpilePostExtractor(ImgpileExtractor):
         data = {"post": post}
         data["count"] = post["count"] = len(files)
 
-        yield Message.Directory, "", data
+        yield Message.Directory, data
         for data["num"], file in enumerate(files, 1):
             data.update(file)
             url = file["url"]
@@ -68,23 +71,24 @@ class ImgpilePostExtractor(ImgpileExtractor):
                 "id_slug": text.extr(media, 'data-id="', '"'),
                 "id" : text.parse_int(text.extr(
                     media, 'data-media-id="', '"')),
-                "url": "http" + text.extr(media, '<a href="http', '"'),
+                "url": f"""http{text.extr(media, '<a href="http', '"')}""",
             })
         return files
 
 
 class ImgpileUserExtractor(ImgpileExtractor):
     subcategory = "user"
-    pattern = BASE_PATTERN + r"/u/([^/?#]+)"
+    pattern = rf"{BASE_PATTERN}/u/([^/?#]+)"
     example = "https://imgpile.com/u/USER"
 
     def items(self):
-        url = self.root + "/api/v1/posts"
+        url = f"{self.root}/api/v1/posts"
         params = {
             "limit"     : "100",
             "sort"      : "latest",
             "period"    : "all",
             "visibility": "public",
+            #  "moderation_status": "approved",
             "username"  : self.groups[0],
         }
         headers = {
@@ -97,7 +101,7 @@ class ImgpileUserExtractor(ImgpileExtractor):
             "Sec-Fetch-Site": "same-origin",
         }
 
-        base = self.root + "/p/"
+        base = f"{self.root}/p/"
         while True:
             data = self.request_json(url, params=params, headers=headers)
 
@@ -107,7 +111,7 @@ class ImgpileUserExtractor(ImgpileExtractor):
 
             for item in data["data"]:
                 item["_extractor"] = ImgpilePostExtractor
-                url = base + item["slug"]
+                url = f"{base}{item['slug']}"
                 yield Message.Queue, url, item
 
             url = data["links"].get("next")

@@ -22,7 +22,7 @@ class DandadanBase():
 
 class DandadanChapterExtractor(DandadanBase, ChapterExtractor):
     """Extractor for dandadan manga chapters"""
-    pattern = BASE_PATTERN + r"(/manga/dandadan-chapter-([^/?#]+)/?)"
+    pattern = rf"{BASE_PATTERN}(/manga/dandadan-chapter-([^/?#]+)/?)"
     example = "https://dandadan.net/manga/dandadan-chapter-123/"
 
     def metadata(self, page):
@@ -31,7 +31,7 @@ class DandadanChapterExtractor(DandadanBase, ChapterExtractor):
         return {
             "manga"        : "Dandadan",
             "chapter"      : text.parse_int(chapter),
-            "chapter_minor": sep + minor,
+            "chapter_minor": f"{sep}{minor}",
             "lang"         : "en",
         }
 
@@ -54,7 +54,7 @@ class DandadanChapterExtractor(DandadanBase, ChapterExtractor):
 class DandadanMangaExtractor(DandadanBase, MangaExtractor):
     """Extractor for dandadan manga"""
     chapterclass = DandadanChapterExtractor
-    pattern = BASE_PATTERN + r"(/)"
+    pattern = rf"{BASE_PATTERN}(/)"
     example = "https://dandadan.net/"
 
     def chapters(self, page):

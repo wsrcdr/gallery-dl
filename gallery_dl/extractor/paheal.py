@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2018-2026 Mike Fährmann
+# Copyright 2018-2025 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -9,7 +9,7 @@
 """Extractors for https://rule34.paheal.net/"""
 
 from .common import Extractor, Message
-from .. import text
+from .. import text, exception
 
 
 class PahealExtractor(Extractor):
@@ -31,7 +31,7 @@ class PahealExtractor(Extractor):
             post["width"] = text.parse_int(post["width"])
             post["height"] = text.parse_int(post["height"])
             post.update(data)
-            yield Message.Directory, "", post
+            yield Message.Directory, post
             yield Message.Url, post["file_url"], post
 
     def get_metadata(self):
@@ -48,17 +48,18 @@ class PahealExtractor(Extractor):
         post = {
             "id"      : post_id,
             "tags"    : extr(": ", "<"),
+            "md5"     : extr("/_thumbs/", "/"),
             "file_url": (extr("id='main_image' src='", "'") or
                          extr("<source src='", "'")),
             "uploader": text.unquote(extr(
                 "class='username' href='/user/", "'")),
-            "date"    : self.parse_datetime_iso(extr("datetime='", "'")),
+            "date"    : text.parse_datetime(
+                extr("datetime='", "'"), "%Y-%m-%dT%H:%M:%S%z"),
             "source"  : text.unescape(text.extr(
                 extr(">Source Link<", "</td>"), "href='", "'")),
         }
 
         dimensions, size, ext = extr("Info</th><td>", "<").split(" // ")
-        post["md5"] = post["file_url"].rpartition("/")[2]
         post["size"] = text.parse_bytes(size[:-1])
         post["width"], _, height = dimensions.partition("x")
         post["height"], _, duration = height.partition(", ")
@@ -83,7 +84,7 @@ class PahealTagExtractor(PahealExtractor):
         if self.config("metadata"):
             self._extract_data = self._extract_data_ex
 
-    def skip_files(self, num):
+    def skip(self, num):
         pages = num // self.per_page
         self.page_start += pages
         return pages * self.per_page
@@ -97,14 +98,8 @@ class PahealTagExtractor(PahealExtractor):
 
         while True:
             try:
-                response = self.request(
-                    base + str(pnum), allow_redirects=False)
-                if response.status_code >= 300:
-                    pid = response.headers["location"].rpartition("/")[2]
-                    yield self._extract_post(pid)
-                    return
-                page = response.text
-            except self.exc.HttpError as exc:
+                page = self.request(f"{base}{pnum}").text
+            except exception.HttpError as exc:
                 if exc.status == 404:
                     return
                 raise
@@ -115,12 +110,13 @@ class PahealTagExtractor(PahealExtractor):
                 yield self._extract_data(post)
 
             if ">Next<" not in page:
-                break
+                return
             pnum += 1
 
     def _extract_data(self, post):
         pid , pos = text.extract(post, "", "'")
         data, pos = text.extract(post, "title='", "'", pos)
+        md5 , pos = text.extract(post, "/_thumbs/", "/", pos)
         url , pos = text.extract(post, "<a href='", "'", pos)
 
         tags, data, date = data.split("\n")
@@ -130,14 +126,14 @@ class PahealTagExtractor(PahealExtractor):
 
         return {
             "id"       : pid,
-            "md5"      : url[url.rfind("/")+1:],
+            "md5"      : md5,
             "file_url" : url,
             "width"    : width,
             "height"   : height,
             "duration" : text.parse_float(duration[:-1]),
             "tags"     : text.unescape(tags),
             "size"     : text.parse_bytes(size[:-1]),
-            "date"     : self.parse_datetime(date, "%B %d, %Y; %H:%M"),
+            "date"     : text.parse_datetime(date, "%B %d, %Y; %H:%M"),
             "filename" : f"{pid} - {tags}",
             "extension": ext,
         }
@@ -157,7 +153,7 @@ class PahealPostExtractor(PahealExtractor):
     def get_posts(self):
         try:
             return (self._extract_post(self.groups[0]),)
-        except self.exc.HttpError as exc:
+        except exception.HttpError as exc:
             if exc.status == 404:
                 return ()
             raise

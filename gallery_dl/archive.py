@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2024-2026 Mike Fährmann
+# Copyright 2024-2025 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -16,26 +16,26 @@ log = logging.getLogger("archive")
 
 
 def connect(path, prefix, format,
-            table=None, mode=None, pragma=None, pathfmt=None, cache_key=None):
+            table=None, mode=None, pragma=None, kwdict=None, cache_key=None):
     keygen = formatter.parse(prefix + format).format_map
 
     if isinstance(path, str) and path.startswith(
             ("postgres://", "postgresql://")):
-        cls = (DownloadArchivePostgresqlMemory if mode == "memory" else
-               DownloadArchivePostgresql)
-    else:
-        if isinstance(path, list):
-            path = pathfmt.generate_path(path)
+        if mode == "memory":
+            cls = DownloadArchivePostgresqlMemory
         else:
-            if "{" in path:
-                log.error("Replacement fields in 'string' archive paths are "
-                          "no longer supported. Use a list of strings "
-                          "instead.")
-            path = util.expand_path(path)
-        cls = DownloadArchiveMemory if mode == "memory" else DownloadArchive
+            cls = DownloadArchivePostgresql
+    else:
+        path = util.expand_path(path)
+        if kwdict is not None and "{" in path:
+            path = formatter.parse(path).format_map(kwdict)
+        if mode == "memory":
+            cls = DownloadArchiveMemory
+        else:
+            cls = DownloadArchive
 
-    if pathfmt is not None and table:
-        table = formatter.parse(table).format_map(pathfmt.kwdict)
+    if kwdict is not None and table:
+        table = formatter.parse(table).format_map(kwdict)
 
     return cls(path, keygen, table, pragma, cache_key)
 

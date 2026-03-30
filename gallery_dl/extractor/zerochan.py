@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2022-2026 Mike Fährmann
+# Copyright 2022-2025 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -9,7 +9,8 @@
 """Extractors for https://www.zerochan.net/"""
 
 from .booru import BooruExtractor
-from .. import text, util
+from ..cache import cache
+from .. import text, util, exception
 import collections
 
 BASE_PATTERN = r"(?:https?://)?(?:www\.)?zerochan\.net"
@@ -25,7 +26,7 @@ class ZerochanExtractor(BooruExtractor):
     per_page = 200
     cookies_domain = ".zerochan.net"
     cookies_names = ("z_id", "z_hash")
-    useragent = util.USERAGENT_GALLERYDL
+    useragent = util.USERAGENT
     request_interval = (0.5, 1.5)
 
     def login(self):
@@ -35,12 +36,11 @@ class ZerochanExtractor(BooruExtractor):
 
         username, password = self._get_auth_info()
         if username:
-            return self.cookies_update(self.cache(
-                self._login_impl, username, password,
-                _exp=90*86400, _mem=False))
+            return self.cookies_update(self._login_impl(username, password))
 
         self._logged_in = False
 
+    @cache(maxage=90*86400, keyarg=1)
     def _login_impl(self, username, password):
         self.log.info("Logging in as %s", username)
 
@@ -59,7 +59,7 @@ class ZerochanExtractor(BooruExtractor):
         response = self.request(
             url, method="POST", headers=headers, data=data, expected=(500,))
         if not response.history:
-            raise self.exc.AuthenticationError()
+            raise exception.AuthenticationError()
 
         return response.cookies
 
@@ -76,7 +76,7 @@ class ZerochanExtractor(BooruExtractor):
         data = {
             "id"      : text.parse_int(entry_id),
             "file_url": jsonld["contentUrl"],
-            "date"    : self.parse_datetime_iso(jsonld["datePublished"]),
+            "date"    : text.parse_datetime(jsonld["datePublished"]),
             "width"   : text.parse_int(jsonld["width"][:-3]),
             "height"  : text.parse_int(jsonld["height"][:-3]),
             "size"    : text.parse_bytes(jsonld["contentSize"][:-1]),
@@ -128,7 +128,7 @@ class ZerochanExtractor(BooruExtractor):
         return data
 
     def _parse_json(self, txt):
-        txt = text.re(r"[\x00-\x1f\x7f]").sub("", txt)
+        txt = util.re(r"[\x00-\x1f\x7f]").sub("", txt)
         main, _, tags = txt.partition('tags": [')
 
         item = {}
@@ -173,6 +173,7 @@ class ZerochanTagExtractor(ZerochanExtractor):
             self.per_page = 24
         else:
             self.posts = self.posts_api
+            self.session.headers["User-Agent"] = util.USERAGENT
 
         if exts := self.config("extensions"):
             if isinstance(exts, str):
@@ -196,7 +197,7 @@ class ZerochanTagExtractor(ZerochanExtractor):
             try:
                 page = self.request(
                     url, params=params, expected=(500,)).text
-            except self.exc.HttpError as exc:
+            except exception.HttpError as exc:
                 if exc.status == 404:
                     return
                 raise
@@ -241,7 +242,7 @@ class ZerochanTagExtractor(ZerochanExtractor):
             try:
                 response = self.request(
                     url, params=params, allow_redirects=False)
-            except self.exc.HttpError as exc:
+            except exception.HttpError as exc:
                 if exc.status == 404:
                     return
                 raise
@@ -251,7 +252,7 @@ class ZerochanTagExtractor(ZerochanExtractor):
                 self.log.warning("HTTP redirect to %s", url)
                 if self.config("redirects"):
                     continue
-                raise self.exc.AbortExtraction()
+                raise exception.AbortExtraction()
 
             data = response.json()
             try:
@@ -293,8 +294,8 @@ class ZerochanImageExtractor(ZerochanExtractor):
 
         try:
             post = self._parse_entry_html(image_id)
-        except self.exc.HttpError as exc:
-            if exc.status in {404, 410}:
+        except exception.HttpError as exc:
+            if exc.status in (404, 410):
                 if msg := text.extr(exc.response.text, "<h2>", "<"):
                     self.log.warning(f"'{msg}'")
                 return ()

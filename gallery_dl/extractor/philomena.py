@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2021-2026 Mike Fährmann
+# Copyright 2021-2025 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -9,7 +9,7 @@
 """Extractors for Philomena sites"""
 
 from .booru import BooruExtractor
-from .. import text
+from .. import text, exception
 
 
 class PhilomenaExtractor(BooruExtractor):
@@ -36,7 +36,8 @@ class PhilomenaExtractor(BooruExtractor):
         return url
 
     def _prepare(self, post):
-        post["date"] = self.parse_datetime_iso(post["created_at"][:19])
+        post["date"] = text.parse_datetime(
+            post["created_at"][:19], "%Y-%m-%dT%H:%M:%S")
 
 
 BASE_PATTERN = PhilomenaExtractor.update({
@@ -113,10 +114,10 @@ class PhilomenaGalleryExtractor(PhilomenaExtractor):
         try:
             return {"gallery": self.api.gallery(self.groups[-1])}
         except IndexError:
-            raise self.exc.NotFoundError("gallery")
+            raise exception.NotFoundError("gallery")
 
     def posts(self):
-        gallery_id = "gallery_id:" + self.groups[-1]
+        gallery_id = f"gallery_id:{self.groups[-1]}"
         params = {"sd": "desc", "sf": gallery_id, "q": gallery_id}
         return self.api.search(params)
 
@@ -159,7 +160,7 @@ class PhilomenaAPI():
 
             # error
             self.extractor.log.debug(response.content)
-            raise self.extractor.exc.HttpError("", response)
+            raise exception.HttpError("", response)
 
     def _pagination(self, endpoint, params):
         extr = self.extractor

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2020-2026 Mike Fährmann
+# Copyright 2020-2025 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -9,7 +9,8 @@
 """Extractors for https://inkbunny.net/"""
 
 from .common import Extractor, Message
-from .. import text
+from .. import text, exception
+from ..cache import cache
 
 
 BASE_PATTERN = r"(?:https?://)?(?:www\.)?inkbunny\.net"
@@ -34,8 +35,8 @@ class InkbunnyExtractor(Extractor):
 
         for post in self.posts():
             post.update(metadata)
-            post["date"] = self.parse_datetime_iso(
-                post["create_datetime"][:19])
+            post["date"] = text.parse_datetime(
+                post["create_datetime"] + "00", "%Y-%m-%d %H:%M:%S.%f%z")
             post["tags"] = [kw["keyword_name"] for kw in post["keywords"]]
             post["ratings"] = [r["name"] for r in post["ratings"]]
             files = post["files"]
@@ -47,12 +48,12 @@ class InkbunnyExtractor(Extractor):
             del post["keywords"]
             del post["files"]
 
-            yield Message.Directory, "", post
+            yield Message.Directory, post
             for post["num"], file in enumerate(files, 1):
                 post.update(file)
                 post["deleted"] = (file["deleted"] == "t")
-                post["date"] = self.parse_datetime_iso(
-                    file["create_datetime"][:19])
+                post["date"] = text.parse_datetime(
+                    file["create_datetime"] + "00", "%Y-%m-%d %H:%M:%S.%f%z")
                 text.nameext_from_url(file["file_name"], post)
 
                 url = file["file_url_full"]
@@ -277,7 +278,7 @@ class InkbunnyPostExtractor(InkbunnyExtractor):
     def posts(self):
         submissions = self.api.detail(({"submission_id": self.submission_id},))
         if submissions[0] is None:
-            raise self.exc.NotFoundError("submission")
+            raise exception.NotFoundError("submission")
         return submissions
 
 
@@ -324,30 +325,14 @@ class InkbunnyAPI():
         self._call("userrating", params)
 
     def authenticate(self, invalidate=False):
-        extr = self.extractor
-        username, password = extr._get_auth_info()
-        if not username:
-            username, password = "guest", ""
+        username, password = self.extractor._get_auth_info()
         if invalidate:
-            extr.cache_update(self._authenticate_impl, username, None)
-
-        self.session_id = extr.cache(
-            self._authenticate_impl, username, password,
-            _exp=365*86400, _mem=False)
-
-        if username == "guest":
+            _authenticate_impl.invalidate(username or "guest")
+        if username:
+            self.session_id = _authenticate_impl(self, username, password)
+        else:
+            self.session_id = _authenticate_impl(self, "guest", "")
             self.set_allowed_ratings()
-
-    def _authenticate_impl(self, username, password):
-        self.extractor.log.info("Logging in as %s", username)
-
-        url = "https://inkbunny.net/api_login.php"
-        data = {"username": username, "password": password}
-        data = self.extractor.request_json(url, method="POST", data=data)
-
-        if "sid" not in data:
-            raise Extractor.exc.AuthenticationError(data.get("error_message"))
-        return data["sid"]
 
     def _call(self, endpoint, params):
         url = "https://inkbunny.net/api_" + endpoint + ".php"
@@ -363,7 +348,7 @@ class InkbunnyAPI():
                 self.authenticate(invalidate=True)
                 continue
 
-            raise self.extractor.exc.AbortExtraction(data.get("error_message"))
+            raise exception.AbortExtraction(data.get("error_message"))
 
     def _pagination_search(self, params):
         params["page"] = 1
@@ -383,3 +368,16 @@ class InkbunnyAPI():
                 del params["get_rid"]
                 params["rid"] = data["rid"]
             params["page"] += 1
+
+
+@cache(maxage=365*86400, keyarg=1)
+def _authenticate_impl(api, username, password):
+    api.extractor.log.info("Logging in as %s", username)
+
+    url = "https://inkbunny.net/api_login.php"
+    data = {"username": username, "password": password}
+    data = api.extractor.request_json(url, method="POST", data=data)
+
+    if "sid" not in data:
+        raise exception.AuthenticationError(data.get("error_message"))
+    return data["sid"]

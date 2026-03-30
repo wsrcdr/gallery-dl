@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2025-2026 Mike Fährmann
+# Copyright 2025 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -9,7 +9,7 @@
 """Extractors for https://fansly.com/"""
 
 from .common import Extractor, Message
-from .. import text, util
+from .. import text, util, exception
 import time
 
 BASE_PATTERN = r"(?:https?://)?(?:www\.)?fansly\.com"
@@ -25,20 +25,19 @@ class FanslyExtractor(Extractor):
 
     def _init(self):
         self.api = FanslyAPI(self)
-        self.previews = self.config("previews", True)
 
         if fmts := self.config("formats"):
             self.formats = set(fmts)
         else:
-            self.formats = None
+            self.formats = {1, 2, 3, 4, 302, 303}
 
     def items(self):
         for post in self.posts():
             files = self._extract_files(post)
             post["count"] = len(files)
-            post["date"] = self.parse_timestamp(post["createdAt"])
+            post["date"] = text.parse_timestamp(post["createdAt"])
 
-            yield Message.Directory, "", post
+            yield Message.Directory, post
             for post["num"], file in enumerate(files, 1):
                 post.update(file)
                 url = file["url"]
@@ -54,7 +53,7 @@ class FanslyExtractor(Extractor):
                 if wall["id"] == wall_id:
                     break
             else:
-                raise self.exc.NotFoundError("wall")
+                raise exception.NotFoundError("wall")
             walls = (wall,)
 
         for wall in walls:
@@ -62,8 +61,7 @@ class FanslyExtractor(Extractor):
             yield from self.posts_wall(account, wall)
 
     def _extract_files(self, post):
-        if "attachments" not in post:
-            return ()
+        files = []
 
         if "_extra" in post:
             extra = post.pop("_extra", ())
@@ -77,41 +75,34 @@ class FanslyExtractor(Extractor):
                 if mid in media
             )
 
-        files = []
         for attachment in post.pop("attachments"):
             try:
                 self._extract_attachment(files, post, attachment)
             except Exception as exc:
-                self.log.traceback(exc)
+                self.log.debug("", exc_info=exc)
                 self.log.error(
                     "%s/%s, Failed to extract media (%s: %s)",
                     post["id"], attachment.get("id"),
                     exc.__class__.__name__, exc)
         return files
 
-    def _extract_attachment(self, files, post, attachment, preview=False):
-        media = attachment["preview" if preview else "media"]
+    def _extract_attachment(self, files, post, attachment):
+        media = attachment["media"]
 
         variants = media.pop("variants") or []
         if media.get("locations"):
             variants.append(media)
 
-        fmts = self.formats
         formats = [
             (variant["width"], (type-500 if type > 256 else type), variant)
             for variant in variants
             if variant.get("locations") and
-            (type := variant["type"]) and
-            (fmts is None or type in fmts)
+            (type := variant["type"]) in self.formats
         ]
 
         try:
             variant = max(formats)[-1]
         except Exception:
-            if self.previews and "preview" in attachment and not preview:
-                self.log.info("%s/%s: Downloading Preview",
-                              post["id"], attachment["id"])
-                return self._extract_attachment(files, post, attachment, True)
             return self.log.warning("%s/%s: No format available",
                                     post["id"], attachment["id"])
 
@@ -125,10 +116,9 @@ class FanslyExtractor(Extractor):
 
         file = {
             **variant,
-            "preview": preview,
             "format": variant["type"],
-            "date": self.parse_timestamp(media["createdAt"]),
-            "date_updated": self.parse_timestamp(media["updatedAt"]),
+            "date": text.parse_timestamp(media["createdAt"]),
+            "date_updated": text.parse_timestamp(media["updatedAt"]),
         }
 
         if "metadata" in location:
@@ -143,7 +133,7 @@ class FanslyExtractor(Extractor):
 
             files.append({
                 "file": file,
-                "url": "ytdl:" + location["location"],
+                "url": f"ytdl:{location['location']}",
                 "_fallback": fallback,
                 "_ytdl_manifest":
                     "dash" if mime == "application/dash+xml" else "hls",
@@ -163,7 +153,7 @@ class FanslyExtractor(Extractor):
 
 class FanslyPostExtractor(FanslyExtractor):
     subcategory = "post"
-    pattern = BASE_PATTERN + r"/post/(\d+)"
+    pattern = rf"{BASE_PATTERN}/post/(\d+)"
     example = "https://fansly.com/post/1234567890"
 
     def posts(self):
@@ -172,7 +162,7 @@ class FanslyPostExtractor(FanslyExtractor):
 
 class FanslyHomeExtractor(FanslyExtractor):
     subcategory = "home"
-    pattern = BASE_PATTERN + r"/home(?:/(?:subscribed()|list/(\d+)))?"
+    pattern = rf"{BASE_PATTERN}/home(?:/(?:subscribed()|list/(\d+)))?"
     example = "https://fansly.com/home"
 
     def posts(self):
@@ -188,11 +178,11 @@ class FanslyHomeExtractor(FanslyExtractor):
 
 class FanslyListExtractor(FanslyExtractor):
     subcategory = "list"
-    pattern = BASE_PATTERN + r"/lists/(\d+)"
+    pattern = rf"{BASE_PATTERN}/lists/(\d+)"
     example = "https://fansly.com/lists/1234567890"
 
     def items(self):
-        base = self.root + "/"
+        base = f"{self.root}/"
         for account in self.api.lists_itemsnew(self.groups[0]):
             account["_extractor"] = FanslyCreatorPostsExtractor
             url = f"{base}{account['username']}/posts"
@@ -201,11 +191,11 @@ class FanslyListExtractor(FanslyExtractor):
 
 class FanslyListsExtractor(FanslyExtractor):
     subcategory = "lists"
-    pattern = BASE_PATTERN + r"/lists"
+    pattern = rf"{BASE_PATTERN}/lists"
     example = "https://fansly.com/lists"
 
     def items(self):
-        base = self.root + "/lists/"
+        base = f"{self.root}/lists/"
         for list in self.api.lists_account():
             list["_extractor"] = FanslyListExtractor
             url = f"{base}{list['id']}#{list['label']}"
@@ -214,7 +204,7 @@ class FanslyListsExtractor(FanslyExtractor):
 
 class FanslyCreatorPostsExtractor(FanslyExtractor):
     subcategory = "creator-posts"
-    pattern = BASE_PATTERN + r"/([^/?#]+)/posts(?:/wall/(\d+))?"
+    pattern = rf"{BASE_PATTERN}/([^/?#]+)/posts(?:/wall/(\d+))?"
     example = "https://fansly.com/CREATOR/posts"
 
     def posts_wall(self, account, wall):
@@ -223,7 +213,7 @@ class FanslyCreatorPostsExtractor(FanslyExtractor):
 
 class FanslyCreatorMediaExtractor(FanslyExtractor):
     subcategory = "creator-media"
-    pattern = BASE_PATTERN + r"/([^/?#]+)/media(?:/wall/(\d+))?"
+    pattern = rf"{BASE_PATTERN}/([^/?#]+)/media(?:/wall/(\d+))?"
     example = "https://fansly.com/CREATOR/media"
 
     def posts_wall(self, account, wall):
@@ -316,7 +306,7 @@ class FanslyAPI():
         return self._pagination(endpoint, params)
 
     def timeline_new(self, account_id, wall_id):
-        endpoint = "/v1/timelinenew/" + str(account_id)
+        endpoint = f"/v1/timelinenew/{account_id}"
         params = {
             "before"       : "0",
             "after"        : "0",
@@ -341,20 +331,12 @@ class FanslyAPI():
 
         posts = response["posts"]
         for post in posts:
-            try:
-                post["account"] = accounts[post.pop("accountId")]
-            except KeyError:
-                pass
+            post["account"] = accounts[post.pop("accountId")]
 
             extra = None
             attachments = []
             for attachment in post["attachments"]:
-                try:
-                    cid = attachment["contentId"]
-                except KeyError:
-                    attachments.append(attachment)
-                    continue
-
+                cid = attachment["contentId"]
                 if cid in media:
                     attachments.append(media[cid])
                 elif cid in bundles:
@@ -430,7 +412,8 @@ class FanslyAPI():
         while True:
             response = self._call(endpoint, params)
 
-            if not (data := response.get("data")):
+            data = response["data"]
+            if not data:
                 return
             yield from self._update_media(data, response["aggregationData"])
             params["before"] = data[-1]["id"]

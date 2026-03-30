@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2018-2026 Mike Fährmann
+# Copyright 2018-2025 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -9,7 +9,8 @@
 """Extractors for https://www.newgrounds.com/"""
 
 from .common import Extractor, Message, Dispatch
-from .. import text, util, dt
+from .. import text, util, exception
+from ..cache import cache
 import itertools
 
 BASE_PATTERN = r"(?:https?://)?(?:www\.)?newgrounds\.com"
@@ -24,7 +25,7 @@ class NewgroundsExtractor(Extractor):
     archive_fmt = "{_type}{_index}"
     root = "https://www.newgrounds.com"
     cookies_domain = ".newgrounds.com"
-    cookies_names = ("ng_session",)
+    cookies_names = ("NG_GG_username", "vmk1du5I8m")
     request_interval = (0.5, 1.5)
 
     def __init__(self, match):
@@ -33,7 +34,7 @@ class NewgroundsExtractor(Extractor):
         self.user_root = f"https://{self.user}.newgrounds.com"
 
     def _init(self):
-        self._extract_comment_urls = text.re(
+        self._extract_comment_urls = util.re(
             r'(?:<img |data-smartload-)src="([^"]+)').findall
         self.flash = self.config("flash", True)
 
@@ -57,13 +58,13 @@ class NewgroundsExtractor(Extractor):
                 post = self.extract_post(post_url)
                 url = post.get("url")
             except Exception as exc:
-                self.log.traceback(exc)
+                self.log.debug("", exc_info=exc)
                 url = None
 
             if url:
                 if metadata:
                     post.update(metadata)
-                yield Message.Directory, "", post
+                yield Message.Directory, post
                 post["num"] = 0
                 yield Message.Url, url, text.nameext_from_url(url, post)
 
@@ -87,13 +88,12 @@ class NewgroundsExtractor(Extractor):
                     text.nameext_from_url(url, post)
                     yield Message.Url, url, post
             else:
-                self.status |= 1
                 self.log.warning(
                     "Unable to get download URL for '%s'", post_url)
 
     def posts(self):
         """Return URLs of all relevant post pages"""
-        return self._pagination(self.__class__.subcategory, self.groups[1])
+        return self._pagination(self._path, self.groups[1])
 
     def metadata(self):
         """Return general metadata"""
@@ -104,14 +104,13 @@ class NewgroundsExtractor(Extractor):
 
         username, password = self._get_auth_info()
         if username:
-            return self.cookies_update(self.cache(
-                self._login_impl, username, password,
-                _exp=365*86400, _mem=False))
+            self.cookies_update(self._login_impl(username, password))
 
+    @cache(maxage=365*86400, keyarg=1)
     def _login_impl(self, username, password):
         self.log.info("Logging in as %s", username)
 
-        url = self.root + "/login"
+        url = self.root + "/passport"
         response = self.request(url)
         if response.history and response.url.endswith("/social"):
             return self.cookies
@@ -124,18 +123,38 @@ class NewgroundsExtractor(Extractor):
             "Origin": self.root,
             "Referer": url,
         }
+        url = text.urljoin(self.root, text.extr(page, 'action="', '"'))
         data = {
-            "_token"  : text.extr(page, 'name="_token" value="', '"'),
+            "auth"    : text.extr(page, 'name="auth" value="', '"'),
             "remember": "1",
-            "identity": username,
+            "username": username,
             "password": str(password),
+            "code"    : "",
+            "codehint": "------",
+            "mfaCheck": "1",
         }
 
-        try:
+        while True:
             response = self.request(
                 url, method="POST", headers=headers, data=data)
-        except Exception:
-            raise self.exc.AuthenticationError()
+            result = response.json()
+
+            if result.get("success"):
+                break
+            if "errors" in result:
+                raise exception.AuthenticationError(
+                    '"' + '", "'.join(result["errors"]) + '"')
+
+            if result.get("requiresMfa"):
+                data["code"] = self.input("Verification Code: ")
+                data["codehint"] = "      "
+            elif result.get("requiresEmailMfa"):
+                email = result.get("obfuscatedEmail")
+                prompt = f"Email Verification Code ({email}): "
+                data["code"] = self.input(prompt)
+                data["codehint"] = "      "
+
+            data.pop("mfaCheck", None)
 
         return {
             cookie.name: cookie.value
@@ -199,7 +218,7 @@ class NewgroundsExtractor(Extractor):
             "description": text.unescape(extr(':description" content="', '"')),
             "type"       : "art",
             "_type"      : "i",
-            "date"       : dt.parse_iso(extr(
+            "date"       : text.parse_datetime(extr(
                 'itemprop="datePublished" content="', '"')),
             "rating"     : extr('class="rated-', '"'),
             "url"        : full('src="', '"'),
@@ -249,7 +268,7 @@ class NewgroundsExtractor(Extractor):
             "description": text.unescape(extr(':description" content="', '"')),
             "type"       : "audio",
             "_type"      : "a",
-            "date"       : dt.parse_iso(extr(
+            "date"       : text.parse_datetime(extr(
                 'itemprop="datePublished" content="', '"')),
             "url"        : extr('{"url":"', '"').replace("\\/", "/"),
             "index"      : text.parse_int(index),
@@ -268,7 +287,7 @@ class NewgroundsExtractor(Extractor):
             src = src.replace("\\/", "/")
             formats = ()
             type = extr(',"description":"', '"')
-            date = dt.parse_iso(extr(
+            date = text.parse_datetime(extr(
                 'itemprop="datePublished" content="', '"'))
             if type:
                 type = type.rpartition(" ")[2].lower()
@@ -283,7 +302,7 @@ class NewgroundsExtractor(Extractor):
             sources = self.request_json(url, headers=headers)["sources"]
             formats = self._video_formats(sources)
             src = next(formats, "")
-            date = self.parse_timestamp(src.rpartition("?")[2])
+            date = text.parse_timestamp(src.rpartition("?")[2])
             type = "movie"
 
         return {
@@ -302,7 +321,7 @@ class NewgroundsExtractor(Extractor):
 
     def _video_formats(self, sources):
         src = sources["360p"][0]["src"]
-        sub = text.re(r"\.360p\.\w+").sub
+        sub = util.re(r"\.360p\.\w+").sub
 
         for fmt in self.format:
             try:
@@ -350,7 +369,7 @@ class NewgroundsExtractor(Extractor):
                     return
                 if "errors" in data:
                     msg = ", ".join(text.unescape(e) for e in data["errors"])
-                    raise self.exc.AbortExtraction(msg)
+                    raise exception.AbortExtraction(msg)
 
             items = data.get("items")
             if not items:
@@ -406,28 +425,28 @@ class NewgroundsMediaExtractor(NewgroundsExtractor):
 
 class NewgroundsArtExtractor(NewgroundsExtractor):
     """Extractor for all images of a newgrounds user"""
-    subcategory = "art"
+    subcategory = _path = "art"
     pattern = USER_PATTERN + r"/art(?:(?:/page/|/?\?page=)(\d+))?/?$"
     example = "https://USER.newgrounds.com/art"
 
 
 class NewgroundsAudioExtractor(NewgroundsExtractor):
     """Extractor for all audio submissions of a newgrounds user"""
-    subcategory = "audio"
+    subcategory = _path = "audio"
     pattern = USER_PATTERN + r"/audio(?:(?:/page/|/?\?page=)(\d+))?/?$"
     example = "https://USER.newgrounds.com/audio"
 
 
 class NewgroundsMoviesExtractor(NewgroundsExtractor):
     """Extractor for all movies of a newgrounds user"""
-    subcategory = "movies"
+    subcategory = _path = "movies"
     pattern = USER_PATTERN + r"/movies(?:(?:/page/|/?\?page=)(\d+))?/?$"
     example = "https://USER.newgrounds.com/movies"
 
 
 class NewgroundsGamesExtractor(NewgroundsExtractor):
     """Extractor for a newgrounds user's games"""
-    subcategory = "games"
+    subcategory = _path = "games"
     pattern = USER_PATTERN + r"/games(?:(?:/page/|/?\?page=)(\d+))?/?$"
     example = "https://USER.newgrounds.com/games"
 
@@ -490,7 +509,7 @@ class NewgroundsFavoriteExtractor(NewgroundsExtractor):
     def _extract_favorites(self, page):
         return [
             self.root + path
-            for path in text.extract_iter(page, 'href="' + self.root, '"')
+            for path in text.extract_iter(page, f'href="{self.root}', '"')
         ]
 
 
@@ -499,6 +518,7 @@ class NewgroundsFollowingExtractor(NewgroundsFavoriteExtractor):
     subcategory = "following"
     pattern = (USER_PATTERN + r"/favorites/(following)"
                r"(?:(?:/page/|/?\?page=)(\d+))?")
+
     example = "https://USER.newgrounds.com/favorites/following"
 
     def items(self):

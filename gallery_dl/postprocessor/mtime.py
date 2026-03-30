@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2019-2026 Mike Fährmann
+# Copyright 2019-2022 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -9,7 +9,8 @@
 """Use metadata as file modification time"""
 
 from .common import PostProcessor
-from .. import text, util, dt, formatter
+from .. import text, util, formatter
+from datetime import datetime
 
 
 class MtimePP(PostProcessor):
@@ -19,7 +20,7 @@ class MtimePP(PostProcessor):
         if value := options.get("value"):
             self._get = formatter.parse(value, None, util.identity).format_map
         else:
-            key = options.get("mode") or options.get("key", "date")
+            key = options.get("key", "date")
             self._get = lambda kwdict: kwdict.get(key)
 
         events = options.get("event")
@@ -30,14 +31,15 @@ class MtimePP(PostProcessor):
         job.register_hooks({event: self.run for event in events}, options)
 
     def run(self, pathfmt):
-        if mtime := self._get(pathfmt.kwdict):
-            if isinstance(mtime, dt.datetime):
-                mtime = dt.to_ts(mtime)
-            else:
-                mtime = text.parse_int(mtime)
-        else:
-            mtime = None
-        pathfmt.kwdict["_mtime_meta"] = mtime
+        mtime = self._get(pathfmt.kwdict)
+        if mtime is None:
+            return
+
+        pathfmt.kwdict["_mtime_meta"] = (
+            util.datetime_to_timestamp(mtime)
+            if isinstance(mtime, datetime) else
+            text.parse_int(mtime)
+        )
 
 
 __postprocessor__ = MtimePP

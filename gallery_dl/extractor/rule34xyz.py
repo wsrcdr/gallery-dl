@@ -1,18 +1,19 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2024-2026 Mike Fährmann
+# Copyright 2024-2025 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
 # published by the Free Software Foundation.
 
-"""Extractors for https://rule34.world/ and https://rule34.xyz/"""
+"""Extractors for https://rule34.xyz/"""
 
 from .booru import BooruExtractor
-from .. import text
+from .. import text, exception
+from ..cache import cache
 import collections
 
-BASE_PATTERN = r"(?:https?://)?(?:www\.)?rule34\.(xyz|world)"
+BASE_PATTERN = r"(?:https?://)?rule34\.xyz"
 
 
 class Rule34xyzExtractor(BooruExtractor):
@@ -29,8 +30,6 @@ class Rule34xyzExtractor(BooruExtractor):
         2   : "copyright",
         4   : "character",
         8   : "artist",
-        16  : "system",
-        32  : "meta",
     }
     FORMATS = {
         "10" : "pic.jpg",
@@ -38,13 +37,6 @@ class Rule34xyzExtractor(BooruExtractor):
         "101": "mov720.mp4",
         "102": "mov480.mp4",
     }
-
-    def __init__(self, match):
-        if match[1] == "world":
-            self.category = "rule34world"
-            self.root = "https://rule34.world"
-            self.root_cdn = "https://rule34storage.b-cdn.net"
-        BooruExtractor.__init__(self, match)
 
     def _init(self):
         if formats := self.config("format"):
@@ -76,7 +68,8 @@ class Rule34xyzExtractor(BooruExtractor):
 
     def _prepare(self, post):
         post.pop("files", None)
-        post["date"] = self.parse_datetime_iso(post["created"])
+        post["date"] = text.parse_datetime(
+            post["created"], "%Y-%m-%dT%H:%M:%S.%fZ")
         post["filename"], _, post["format"] = post["filename"].rpartition(".")
         if "tags" in post:
             post["tags"] = [t["value"] for t in post["tags"]]
@@ -121,21 +114,21 @@ class Rule34xyzExtractor(BooruExtractor):
     def login(self):
         username, password = self._get_auth_info()
         if username:
-            self.session.headers["Authorization"] = self.cache(
-                self._login_impl, username, password,
-                _exp=3650*86400, _mem=False)
+            self.session.headers["Authorization"] = \
+                self._login_impl(username, password)
 
+    @cache(maxage=3650*86400, keyarg=1)
     def _login_impl(self, username, password):
         self.log.info("Logging in as %s", username)
 
-        url = self.root + "/api/v2/auth/signin"
+        url = f"{self.root}/api/v2/auth/signin"
         data = {"email": username, "password": password}
         response = self.request_json(
             url, method="POST", json=data, fatal=False)
 
         if jwt := response.get("jwt"):
-            return "Bearer " + jwt
-        raise self.exc.AuthenticationError(
+            return f"Bearer {jwt}"
+        raise exception.AuthenticationError(
             (msg := response.get("message")) and f'"{msg}"')
 
 
@@ -146,7 +139,7 @@ class Rule34xyzPostExtractor(Rule34xyzExtractor):
     example = "https://rule34.xyz/post/12345"
 
     def posts(self):
-        return (self._fetch_post(self.groups[1]),)
+        return (self._fetch_post(self.groups[0]),)
 
 
 class Rule34xyzPlaylistExtractor(Rule34xyzExtractor):
@@ -157,10 +150,10 @@ class Rule34xyzPlaylistExtractor(Rule34xyzExtractor):
     example = "https://rule34.xyz/playlists/view/12345"
 
     def metadata(self):
-        return {"playlist_id": self.groups[1]}
+        return {"playlist_id": self.groups[0]}
 
     def posts(self):
-        endpoint = "/v2/post/search/playlist/" + self.groups[1]
+        endpoint = "/v2/post/search/playlist/" + self.groups[0]
         return self._pagination(endpoint)
 
 
@@ -173,7 +166,7 @@ class Rule34xyzTagExtractor(Rule34xyzExtractor):
 
     def metadata(self):
         self.tags = text.unquote(text.unquote(
-            self.groups[1]).replace("_", " ")).split("|")
+            self.groups[0]).replace("_", " ")).split("|")
         return {"search_tags": ", ".join(self.tags)}
 
     def posts(self):

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2021-2026 Mike Fährmann
+# Copyright 2021-2025 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -9,7 +9,8 @@
 """Extractors for https://www.erome.com/"""
 
 from .common import Extractor, Message
-from .. import text, util
+from .. import text, util, exception
+from ..cache import cache
 import itertools
 
 BASE_PATTERN = r"(?:https?://)?(?:www\.)?erome\.com"
@@ -21,14 +22,13 @@ class EromeExtractor(Extractor):
     filename_fmt = "{album_id} {title} {num:>02}.{extension}"
     archive_fmt = "{album_id}_{num}"
     root = "https://www.erome.com"
-    parent = True
     _cookies = True
 
     def items(self):
-        base = self.root + "/a/"
+        base = f"{self.root}/a/"
         data = {"_extractor": EromeAlbumExtractor}
         for album_id in self.albums():
-            yield Message.Queue, base + album_id, data
+            yield Message.Queue, f"{base}{album_id}", data
 
     def albums(self):
         return ()
@@ -36,13 +36,12 @@ class EromeExtractor(Extractor):
     def request(self, url, **kwargs):
         if self._cookies:
             self._cookies = False
-            self.cookies_update(self.cache(
-                _cookie_cache, _key=None, _mem=False))
+            self.cookies.update(_cookie_cache())
 
         for _ in range(5):
             response = Extractor.request(self, url, **kwargs)
             if response.cookies:
-                self.cache_update(_cookie_cache, None, response.cookies)
+                _cookie_cache.update("", response.cookies)
             if response.content.find(
                     b"<title>Please wait a few moments</title>", 0, 600) < 0:
                 return response
@@ -74,13 +73,9 @@ class EromeAlbumExtractor(EromeExtractor):
 
         try:
             page = self.request(url).text
-        except self.exc.HttpError as exc:
-            if exc.status == 410:
-                msg = text.extr(exc.response.text, "<h1>", "<")
-            else:
-                msg = "Unable to fetch album page"
-            raise self.exc.AbortExtraction(
-                f"{album_id}: {msg} ({exc})")
+        except exception.HttpError as exc:
+            raise exception.AbortExtraction(
+                f"{album_id}: Unable to fetch album page ({exc})")
 
         title, pos = text.extract(
             page, 'property="og:title" content="', '"')
@@ -101,7 +96,7 @@ class EromeAlbumExtractor(EromeExtractor):
             if not date:
                 ts = text.extr(group, '?v=', '"')
                 if len(ts) > 1:
-                    date = self.parse_timestamp(ts)
+                    date = text.parse_timestamp(ts)
 
         data = {
             "album_id": album_id,
@@ -115,7 +110,7 @@ class EromeAlbumExtractor(EromeExtractor):
             "_http_headers": {"Referer": url},
         }
 
-        yield Message.Directory, "", data
+        yield Message.Directory, data
         for data["num"], url in enumerate(urls, 1):
             yield Message.Url, url, text.nameext_from_url(url, data)
 
@@ -142,10 +137,11 @@ class EromeSearchExtractor(EromeExtractor):
     example = "https://www.erome.com/search?q=QUERY"
 
     def albums(self):
-        url = self.root + "/search"
+        url = f"{self.root}/search"
         params = text.parse_query(self.groups[0])
         return self._pagination(url, params)
 
 
+@cache()
 def _cookie_cache():
     return ()

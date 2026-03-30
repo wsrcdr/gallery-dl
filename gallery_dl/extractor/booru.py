@@ -57,10 +57,10 @@ class BooruExtractor(BaseExtractor):
             post.update(data)
             self._prepare(post)
 
-            yield Message.Directory, "", post
+            yield Message.Directory, post
             yield Message.Url, url, post
 
-    def skip_files(self, num):
+    def skip(self, num):
         pages = num // self.per_page
         self.page_start += pages
         return pages * self.per_page

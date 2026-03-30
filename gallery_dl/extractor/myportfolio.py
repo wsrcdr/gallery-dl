@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2018-2026 Mike Fährmann
+# Copyright 2018-2025 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -9,7 +9,7 @@
 """Extractors for https://www.myportfolio.com/"""
 
 from .common import Extractor, Message
-from .. import text
+from .. import text, exception
 
 
 class MyportfolioGalleryExtractor(Extractor):
@@ -20,22 +20,21 @@ class MyportfolioGalleryExtractor(Extractor):
     filename_fmt = "{num:>02}.{extension}"
     archive_fmt = "{user}_{filename}"
     pattern = (r"(?:myportfolio:(?:https?://)?([^/]+)|"
-               r"(?:https?://)?(?!cdn\.)([\w-]+\.myportfolio\.com))"
+               r"(?:https?://)?([\w-]+\.myportfolio\.com))"
                r"(/[^/?#]+)?")
     example = "https://USER.myportfolio.com/TITLE"
 
-    def items(self):
-        domain_alt, domain, path = self.groups
-        if domain is None:
-            domain = domain_alt
-            prefix = "myportfolio:"
-        else:
-            prefix = ""
+    def __init__(self, match):
+        Extractor.__init__(self, match)
+        domain1, domain2, self.path = match.groups()
+        self.domain = domain1 or domain2
+        self.prefix = "myportfolio:" if domain1 else ""
 
-        url = f"https://{domain}{path or ''}"
+    def items(self):
+        url = "https://" + self.domain + (self.path or "")
         response = self.request(url)
         if response.history and response.url.endswith(".adobe.com/missing"):
-            raise self.exc.NotFoundError()
+            raise exception.NotFoundError()
         page = response.text
 
         projects = text.extr(
@@ -43,14 +42,14 @@ class MyportfolioGalleryExtractor(Extractor):
 
         if projects:
             data = {"_extractor": MyportfolioGalleryExtractor}
-            base = f"{prefix}https://{domain}"
+            base = self.prefix + "https://" + self.domain
             for path in text.extract_iter(projects, ' href="', '"'):
                 yield Message.Queue, base + path, data
         else:
             data = self.metadata(page)
             imgs = self.images(page)
             data["count"] = len(imgs)
-            yield Message.Directory, "", data
+            yield Message.Directory, data
             for data["num"], url in enumerate(imgs, 1):
                 yield Message.Url, url, text.nameext_from_url(url, data)
 
@@ -73,7 +72,7 @@ class MyportfolioGalleryExtractor(Extractor):
         elif user:
             user, _, title = user.partition(" - ")
         else:
-            raise self.exc.NotFoundError()
+            raise exception.NotFoundError()
 
         return {
             "user": text.unescape(user),

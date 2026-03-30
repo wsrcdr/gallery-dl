@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2023-2026 Mike Fährmann
+# Copyright 2023-2025 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -9,7 +9,8 @@
 """Extractors for https://vipergirls.to/"""
 
 from .common import Extractor, Message
-from .. import text, util
+from .. import text, util, exception
+from ..cache import cache
 
 BASE_PATTERN = r"(?:https?://)?(?:www\.)?vipergirls\.to"
 
@@ -74,7 +75,7 @@ class VipergirlsExtractor(Extractor):
             data["count"] = len(images)
             del data["imagecount"]
 
-            yield Message.Directory, "", data
+            yield Message.Directory, data
             if images:
                 for data["num"], image in enumerate(images, 1):
                     yield Message.Queue, image.attrib["main_url"], data
@@ -87,14 +88,13 @@ class VipergirlsExtractor(Extractor):
 
         username, password = self._get_auth_info()
         if username:
-            return self.cookies_update(self.cache(
-                self._login_impl, username, password,
-                _exp=90*86400, _mem=False))
+            self.cookies_update(self._login_impl(username, password))
 
+    @cache(maxage=90*86400, keyarg=1)
     def _login_impl(self, username, password):
         self.log.info("Logging in as %s", username)
 
-        url = self.root + "/login.php?do=login"
+        url = f"{self.root}/login.php?do=login"
         data = {
             "vb_login_username": username,
             "vb_login_password": password,
@@ -104,7 +104,7 @@ class VipergirlsExtractor(Extractor):
 
         response = self.request(url, method="POST", data=data)
         if not response.cookies.get("vg_password"):
-            raise self.exc.AuthenticationError()
+            raise exception.AuthenticationError()
 
         return {cookie.name: cookie.value
                 for cookie in response.cookies}
