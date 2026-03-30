@@ -13,6 +13,7 @@ from .nozomi import decode_nozomi
 from ..cache import memcache
 from .. import text, util
 import string
+import json
 
 
 class HitomiExtractor(Extractor):
@@ -214,11 +215,38 @@ class HitomiSearchExtractor(HitomiExtractor):
         data = {
             "_extractor": HitomiGalleryExtractor,
             "search_tags": tags,
+            "metadata": {}
         }
 
         for gallery_id in self.gallery_ids(tags):
             gallery_url = f"{self.root}/galleries/{gallery_id}.html"
+            gallery_metadata = self.gallery_metadata(gallery_id)
+            data["metadata"] = gallery_metadata
             yield Message.Queue, gallery_url, data
+
+    def gallery_metadata(self, gallery_id):
+        gallery_url = f"https://ltn.{self.domain}/galleries/{gallery_id}.js"
+        response = self.request(gallery_url).content.decode().split("var galleryinfo =")[1].strip()
+        data = json.loads(response)
+        print(data)
+        # parse data to be friendlier
+        tags = []
+        for t in data["tags"]:
+            p = ""
+            if t.get("male", False):
+                p = "male "
+            elif t.get("female", False):
+                p = "female "
+            tags.append(f"{p}{t['tag']}")
+        data["tags"] = tags
+        data["groups"] = [x["group"] for x in data.get("groups", []) or []]
+        data["artists"] = [x["artist"] for x in data.get("artists", []) or []]
+        data["parodys"] = [x["parody"] for x in data.get("parodys", []) or []]
+        data["characters"] = [x["character"] for x in data.get("characters", []) or []]
+        # remove files as it's unnecessary
+        data["filecount"] = len(data.get("files", []))
+        data.pop("files")
+        return data
 
     def gallery_ids(self, tags):
         result = None
